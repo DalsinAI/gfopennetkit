@@ -156,54 +156,115 @@ class NNTPHandler(socketserver.StreamRequestHandler):
 
 
 # ---- IRC (RFC 2812 subset, CAP LS 302, SASL PLAIN) -------------------------
+# SASL accepts dale / s3cret. The nick "taken" is in use (433). With
+# server-time acked, lines to the client carry @time; with echo-message,
+# the client's own PRIVMSG comes back. Every PRIVMSG is answered by "echo".
+IRC_CAPS = ["sasl=PLAIN,EXTERNAL server-time message-tags",
+            "multi-prefix echo-message away-notify"]
+IRC_TIME = "2026-11-13T19:00:00.000Z"
+
+
 class IRCHandler(socketserver.StreamRequestHandler):
     def out(self, line):
+        if getattr(self, "acked", None) and "server-time" in self.acked and line.startswith(":"):
+            line = "@time=%s %s" % (IRC_TIME, line)
         self.wfile.write(line.encode("utf-8") + b"\r\n")
 
     def handle(self):
         nick = None
         registered = False
         in_cap = False
+        self.acked = set()
+        channels = {}
         for raw in self.rfile:
             line = raw.decode("utf-8", "replace").rstrip("\r\n")
+            if line.startswith("@"):
+                line = line.split(" ", 1)[1] if " " in line else ""
             parts = line.split(" ", 1)
             cmd = parts[0].upper()
             arg = parts[1] if len(parts) > 1 else ""
+            me = nick or "*"
             if cmd == "CAP":
                 sub = arg.split(" ")[0].upper()
                 if sub == "LS":
                     in_cap = True
-                    self.out(":fake.irc CAP * LS :sasl server-time multi-prefix")
+                    if "302" in arg:
+                        self.out(":fake.irc CAP * LS * :" + IRC_CAPS[0])
+                        self.out(":fake.irc CAP * LS :" + IRC_CAPS[1])
+                    else:
+                        self.out(":fake.irc CAP * LS :" + " ".join(IRC_CAPS).replace("=PLAIN,EXTERNAL", ""))
                 elif sub == "REQ":
-                    self.out(":fake.irc CAP * ACK :" + arg.split(":", 1)[-1])
+                    want = arg.split(":", 1)[-1].split()
+                    known = " ".join(IRC_CAPS).split()
+                    known = [k.split("=")[0] for k in known]
+                    if all(w.lstrip("-") in known for w in want):
+                        self.acked.update(w for w in want if not w.startswith("-"))
+                        self.out(":fake.irc CAP %s ACK :%s" % (me, " ".join(want)))
+                    else:
+                        self.out(":fake.irc CAP %s NAK :%s" % (me, " ".join(want)))
                 elif sub == "END":
                     in_cap = False
             elif cmd == "AUTHENTICATE":
                 if arg == "PLAIN":
                     self.out("AUTHENTICATE +")
+                elif arg == "*":
+                    self.out(":fake.irc 906 %s :SASL authentication aborted" % me)
                 else:
-                    self.out(":fake.irc 900 %s %s!u@h dale :You are now logged in" % (nick or "*", nick or "*"))
-                    self.out(":fake.irc 903 %s :SASL authentication successful" % (nick or "*"))
+                    import base64
+                    try:
+                        z, u, pw = base64.b64decode(arg).split(b"\0")
+                    except Exception:
+                        z = u = pw = b""
+                    if u == b"dale" and pw == b"s3cret":
+                        self.out(":fake.irc 900 %s %s!u@h dale :You are now logged in as dale" % (me, me))
+                        self.out(":fake.irc 903 %s :SASL authentication successful" % me)
+                    else:
+                        self.out(":fake.irc 904 %s :SASL authentication failed" % me)
             elif cmd == "NICK":
-                nick = arg.lstrip(":")
-            elif cmd == "USER":
+                want = arg.lstrip(":")
+                if want == "taken":
+                    self.out(":fake.irc 433 %s %s :Nickname is already in use" % (me, want))
+                    continue
+                if registered:
+                    self.out(":%s!u@h NICK :%s" % (nick, want))
+                nick = want
+            elif cmd == "USER" or cmd == "PASS":
                 pass
             elif cmd == "PING":
                 self.out(":fake.irc PONG fake.irc " + arg)
             elif cmd == "JOIN":
-                self.out(":%s!u@h JOIN %s" % (nick, arg))
-                self.out(":fake.irc 353 %s = %s :@op +voice %s" % (nick, arg, nick))
-                self.out(":fake.irc 366 %s %s :End of /NAMES list." % (nick, arg))
-            elif cmd == "PRIVMSG":
+                for ch in arg.split(" ")[0].split(","):
+                    channels[ch] = True
+                    self.out(":%s!u@h JOIN %s" % (nick, ch))
+                    self.out(":fake.irc 332 %s %s :Amiga talk, be nice" % (nick, ch))
+                    if "multi-prefix" in self.acked:
+                        self.out(":fake.irc 353 %s = %s :@+op +voice %s" % (nick, ch, nick))
+                    else:
+                        self.out(":fake.irc 353 %s = %s :@op +voice %s" % (nick, ch, nick))
+                    self.out(":fake.irc 366 %s %s :End of /NAMES list." % (nick, ch))
+                    self.out(":other!o@h JOIN %s" % ch)
+                    self.out(":fake.irc MODE %s +o other" % ch)
+            elif cmd == "PART":
+                ch = arg.split(" ")[0]
+                channels.pop(ch, None)
+                self.out(":%s!u@h PART %s" % (nick, arg))
+            elif cmd in ("PRIVMSG", "NOTICE"):
                 target, text = arg.split(" ", 1)
-                self.out(":echo!e@h PRIVMSG %s %s" % (nick, text))
+                if "echo-message" in self.acked:
+                    self.out(":%s!u@h %s %s %s" % (nick, cmd, target, text))
+                if cmd == "PRIVMSG":
+                    if text.startswith(":\x01VERSION"):
+                        self.out(":echo!e@h PRIVMSG %s :\x01VERSION\x01" % nick)
+                    else:
+                        self.out(":echo!e@h PRIVMSG %s %s" % (target if target in channels else nick, text))
             elif cmd == "QUIT":
                 self.out("ERROR :Closing link")
                 return
             if nick and not registered and not in_cap:
                 registered = True
                 self.out(":fake.irc 001 %s :Welcome to the fake network" % nick)
-                self.out(":fake.irc 005 %s CHANTYPES=# PREFIX=(ov)@+ CASEMAPPING=rfc1459 :are supported" % nick)
+                self.out(":fake.irc 005 %s CHANTYPES=# PREFIX=(ov)@+ CASEMAPPING=rfc1459 NICKLEN=16 "
+                         "CHANMODES=b,k,l,imnt NETWORK=FakeNet :are supported" % nick)
                 self.out(":fake.irc PING :tok123")
 
 
