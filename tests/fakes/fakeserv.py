@@ -26,6 +26,8 @@ GROUPS = {
     },
     "alt.binaries.test": {},
 }
+# LIST ACTIVE: name high low status
+NEWGROUPS = ["comp.sys.amiga.announce"]
 BODY = {
     3: [".leading dot line", "..two dots", "plain"],
 }
@@ -64,6 +66,25 @@ class NNTPHandler(socketserver.StreamRequestHandler):
                     self.out("481 authentication failed")
             elif not authed:
                 self.out("480 authentication required")
+            elif cmd == "LIST" and (len(parts) == 1 or parts[1].upper() == "ACTIVE"):
+                self.out("215 list of newsgroups follows")
+                for name, g in sorted(GROUPS.items()):
+                    nums = sorted(g) or [0]
+                    hi, lo = nums[-1], nums[0] if g else 1
+                    self.out("%s %d %d %s" % (name, hi, lo, "y"))
+                self.out(".")
+            elif cmd == "NEWGROUPS":
+                self.out("231 list of new newsgroups follows")
+                for name in NEWGROUPS:
+                    self.out("%s 0 1 y" % name)
+                self.out(".")
+            elif cmd == "STAT" and len(parts) > 1 and group:
+                n = int(parts[1]) if parts[1].isdigit() else -1
+                art = GROUPS[group].get(n)
+                if art:
+                    self.out("223 %d %s" % (n, art[2]))
+                else:
+                    self.out("423 no such article")
             elif cmd == "GROUP" and len(parts) > 1:
                 g = GROUPS.get(parts[1])
                 if g is None:
@@ -81,17 +102,23 @@ class NNTPHandler(socketserver.StreamRequestHandler):
                     self.out("\t".join([str(n), subj, frm, "13 Nov 2026 18:00:00 +0000",
                                         mid, ref, "100", "3"]))
                 self.out(".")
-            elif cmd in ("ARTICLE", "BODY") and len(parts) > 1 and group:
+            elif cmd in ("ARTICLE", "BODY", "HEAD") and len(parts) > 1 and group:
                 n = int(parts[1]) if parts[1].isdigit() else -1
                 art = GROUPS[group].get(n)
                 if not art:
                     self.out("423 no such article")
                     continue
-                self.out("%d %d %s" % (220 if cmd == "ARTICLE" else 222, n, art[2]))
-                if cmd == "ARTICLE":
+                self.out("%d %d %s" % ({"ARTICLE": 220, "HEAD": 221, "BODY": 222}[cmd], n, art[2]))
+                if cmd != "BODY":
                     self.out("Subject: " + art[0])
                     self.out("From: " + art[1])
                     self.out("Message-ID: " + art[2])
+                    if art[3]:
+                        self.out("References: " + art[3])
+                if cmd == "HEAD":
+                    self.out(".")
+                    continue
+                if cmd == "ARTICLE":
                     self.out("")
                 for b in BODY.get(n, ["body of %d" % n]):
                     self.out("." + b if b.startswith(".") else b)  # dot-stuffing
