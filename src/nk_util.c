@@ -17,8 +17,29 @@ const char *nk_strerror(int err)
     case NK_ECANCELLED: return "cancelled";
     case NK_EREFUSED:   return "refused";
     case NK_ECORRUPT:   return "damaged record";
+    case NK_ERESOLVE:   return "host name not found";
+    case NK_EUNREACH:   return "host unreachable";
+    case NK_ESOCKET:    return "no socket (is the TCP/IP stack running?)";
     default:            return "unknown error";
     }
+}
+
+int nk_parse_ipv4(const char *s, uint8_t out[4])
+{
+    int part;
+    for (part = 0; part < 4; part++) {
+        unsigned v = 0, d = 0;
+        while (*s >= '0' && *s <= '9' && d < 4) {
+            v = v * 10 + (unsigned)(*s++ - '0');
+            d++;
+        }
+        if (!d || d > 3 || v > 255)
+            return 0;
+        out[part] = (uint8_t)v;
+        if (part < 3 && *s++ != '.')
+            return 0;
+    }
+    return *s == 0;
 }
 
 void nk_transport_close(NKTransport *t)

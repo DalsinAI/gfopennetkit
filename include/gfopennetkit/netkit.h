@@ -34,11 +34,22 @@ enum {
     NK_ETIMEDOUT   = -7,
     NK_EARG        = -8,
     NK_ECANCELLED  = -9,  /* nk_conn_cancel() was called (QUIT, "cancel all") */
-    NK_EREFUSED    = -10, /* proxy or peer refused */
-    NK_ECORRUPT    = -11  /* a journal record failed its check */
+    NK_EREFUSED    = -10, /* proxy or peer refused (connect: nothing listening) */
+    NK_ECORRUPT    = -11, /* a journal record failed its check */
+    NK_ERESOLVE    = -12, /* connect: the host name was not found */
+    NK_EUNREACH    = -13, /* connect: no route to the host or its network */
+    NK_ESOCKET     = -14  /* connect: no socket (TCP/IP stack not running?) */
 };
 
+/* A short English text for each code, for logs and status lines. connect
+ * answers NK_ERESOLVE, NK_ESOCKET, NK_EREFUSED, NK_EUNREACH, NK_ETIMEDOUT
+ * or NK_EIO, so an app can say which step failed. */
 const char *nk_strerror(int err);
+
+/* A dotted IPv4 address ("192.168.0.195") into four bytes in network
+ * order: 1, or 0 when it is not one (a host name to look up). Strict:
+ * four decimal parts 0-255, no leading '+', no spaces. */
+int nk_parse_ipv4(const char *s, uint8_t out[4]);
 
 /* ---- CRC32 (IEEE 802.3, reflected, as zlib, PNG, yEnc and PAR2 use) ------
  * Our own table-driven code. nk_crc32_update(0, ...) starts a new CRC. */
