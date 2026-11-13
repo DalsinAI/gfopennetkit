@@ -15,7 +15,7 @@ TLS=${TLS:-"$HERE/../gfopentls"}
 OUT=${OUT:-"$HERE/build-amiga"}
 CFLAGS="-m68040 -O2 -fomit-frame-pointer -noixemul -Wall -Wextra -Wno-unused-parameter -std=gnu99 -I$HERE/include -I$TLS/include"
 SRC="src/nk_crc32.c src/nk_util.c src/nk_line.c src/nk_conn.c src/nk_socks5.c
-     src/nk_tls.c src/nk_journal.c src/amiga/nk_amiga.c"
+     src/nk_tls.c src/nk_journal.c src/nk_textview.c src/amiga/nk_amiga.c"
 mkdir -p "$OUT/obj" "$OUT/lib"
 OBJS=""
 for s in $SRC; do
