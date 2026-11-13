@@ -28,9 +28,10 @@ timing.
 Passwords are not kept here: apps get them from gfopenkeys.library (the system
 keystore) and hand them over only for the moment they are sent.
 
-Still to come in this repo: the text view (scrollback ring, wrapping, URL
-detection, mIRC colours, quote levels, search) as a model with tests, then
-its GFOpenLayout element.
+| Text view model | `textview.h` `nk_tv_*` | scrollback ring bounded by lines and bytes, seq numbers that survive eviction, a last-read marker; IRC codes (bold, italic, underline, strike, mono, reverse, `^C` colours, `^D` hex colours, reset) taken out into style runs; news quote levels and the dimmed `-- ` signature; links (http, https, ftp, news, nntp, irc, ircs, mailto, www.) with trailing punctuation and unmatched `)` left out; wrapping through the caller's measure function (pixels on screen), never inside a UTF-8 character; search both ways; copy |
+
+Still to come in this repo: the text view's GFOpenLayout element (drawing,
+scrolling, selection with the mouse), which needs a lab run.
 
 ## Building and testing
 

@@ -26,12 +26,23 @@ GROUPS = {
     },
     "alt.binaries.test": {},
 }
+# LIST ACTIVE: name high low status
+NEWGROUPS = ["comp.sys.amiga.announce"]
 BODY = {
     3: [".leading dot line", "..two dots", "plain"],
 }
 
 
+def spool_file(spool, msgid):
+    """Spool article for a message-id: <spool>/<id with unsafe chars as _>.art"""
+    safe = "".join(c if c.isalnum() or c in "@._-" else "_" for c in msgid.strip("<>"))
+    return os.path.join(spool, safe + ".art")
+
+
 class NNTPHandler(socketserver.StreamRequestHandler):
+    # binaries tests put articles in a spool directory named by this variable
+    spool_env = "NK_NNTP_SPOOL"
+
     def out(self, line):
         self.wfile.write(line.encode("latin-1") + b"\r\n")
 
@@ -64,6 +75,25 @@ class NNTPHandler(socketserver.StreamRequestHandler):
                     self.out("481 authentication failed")
             elif not authed:
                 self.out("480 authentication required")
+            elif cmd == "LIST" and (len(parts) == 1 or parts[1].upper() == "ACTIVE"):
+                self.out("215 list of newsgroups follows")
+                for name, g in sorted(GROUPS.items()):
+                    nums = sorted(g) or [0]
+                    hi, lo = nums[-1], nums[0] if g else 1
+                    self.out("%s %d %d %s" % (name, hi, lo, "y"))
+                self.out(".")
+            elif cmd == "NEWGROUPS":
+                self.out("231 list of new newsgroups follows")
+                for name in NEWGROUPS:
+                    self.out("%s 0 1 y" % name)
+                self.out(".")
+            elif cmd == "STAT" and len(parts) > 1 and group:
+                n = int(parts[1]) if parts[1].isdigit() else -1
+                art = GROUPS[group].get(n)
+                if art:
+                    self.out("223 %d %s" % (n, art[2]))
+                else:
+                    self.out("423 no such article")
             elif cmd == "GROUP" and len(parts) > 1:
                 g = GROUPS.get(parts[1])
                 if g is None:
@@ -81,17 +111,42 @@ class NNTPHandler(socketserver.StreamRequestHandler):
                     self.out("\t".join([str(n), subj, frm, "13 Nov 2026 18:00:00 +0000",
                                         mid, ref, "100", "3"]))
                 self.out(".")
-            elif cmd in ("ARTICLE", "BODY") and len(parts) > 1 and group:
+            elif cmd in ("ARTICLE", "BODY") and len(parts) > 1 and parts[1].startswith("<"):
+                spool = os.environ.get(self.spool_env)
+                path = spool_file(spool, parts[1]) if spool else None
+                if not path or not os.path.exists(path):
+                    self.out("430 no such article")
+                    continue
+                self.out("%d 0 %s" % (220 if cmd == "ARTICLE" else 222, parts[1]))
+                with open(path, "rb") as f:
+                    body = f.read()
+                if cmd == "ARTICLE":
+                    self.out("Message-ID: " + parts[1])
+                    self.out("")
+                if body.endswith(b"\n"):
+                    body = body[:-1]
+                for b in body.split(b"\n"):
+                    if b.endswith(b"\r"):
+                        b = b[:-1]
+                    self.wfile.write((b"." + b if b.startswith(b".") else b) + b"\r\n")
+                self.out(".")
+            elif cmd in ("ARTICLE", "BODY", "HEAD") and len(parts) > 1 and group:
                 n = int(parts[1]) if parts[1].isdigit() else -1
                 art = GROUPS[group].get(n)
                 if not art:
                     self.out("423 no such article")
                     continue
-                self.out("%d %d %s" % (220 if cmd == "ARTICLE" else 222, n, art[2]))
-                if cmd == "ARTICLE":
+                self.out("%d %d %s" % ({"ARTICLE": 220, "HEAD": 221, "BODY": 222}[cmd], n, art[2]))
+                if cmd != "BODY":
                     self.out("Subject: " + art[0])
                     self.out("From: " + art[1])
                     self.out("Message-ID: " + art[2])
+                    if art[3]:
+                        self.out("References: " + art[3])
+                if cmd == "HEAD":
+                    self.out(".")
+                    continue
+                if cmd == "ARTICLE":
                     self.out("")
                 for b in BODY.get(n, ["body of %d" % n]):
                     self.out("." + b if b.startswith(".") else b)  # dot-stuffing
@@ -101,54 +156,115 @@ class NNTPHandler(socketserver.StreamRequestHandler):
 
 
 # ---- IRC (RFC 2812 subset, CAP LS 302, SASL PLAIN) -------------------------
+# SASL accepts dale / s3cret. The nick "taken" is in use (433). With
+# server-time acked, lines to the client carry @time; with echo-message,
+# the client's own PRIVMSG comes back. Every PRIVMSG is answered by "echo".
+IRC_CAPS = ["sasl=PLAIN,EXTERNAL server-time message-tags",
+            "multi-prefix echo-message away-notify"]
+IRC_TIME = "2026-11-13T19:00:00.000Z"
+
+
 class IRCHandler(socketserver.StreamRequestHandler):
     def out(self, line):
+        if getattr(self, "acked", None) and "server-time" in self.acked and line.startswith(":"):
+            line = "@time=%s %s" % (IRC_TIME, line)
         self.wfile.write(line.encode("utf-8") + b"\r\n")
 
     def handle(self):
         nick = None
         registered = False
         in_cap = False
+        self.acked = set()
+        channels = {}
         for raw in self.rfile:
             line = raw.decode("utf-8", "replace").rstrip("\r\n")
+            if line.startswith("@"):
+                line = line.split(" ", 1)[1] if " " in line else ""
             parts = line.split(" ", 1)
             cmd = parts[0].upper()
             arg = parts[1] if len(parts) > 1 else ""
+            me = nick or "*"
             if cmd == "CAP":
                 sub = arg.split(" ")[0].upper()
                 if sub == "LS":
                     in_cap = True
-                    self.out(":fake.irc CAP * LS :sasl server-time multi-prefix")
+                    if "302" in arg:
+                        self.out(":fake.irc CAP * LS * :" + IRC_CAPS[0])
+                        self.out(":fake.irc CAP * LS :" + IRC_CAPS[1])
+                    else:
+                        self.out(":fake.irc CAP * LS :" + " ".join(IRC_CAPS).replace("=PLAIN,EXTERNAL", ""))
                 elif sub == "REQ":
-                    self.out(":fake.irc CAP * ACK :" + arg.split(":", 1)[-1])
+                    want = arg.split(":", 1)[-1].split()
+                    known = " ".join(IRC_CAPS).split()
+                    known = [k.split("=")[0] for k in known]
+                    if all(w.lstrip("-") in known for w in want):
+                        self.acked.update(w for w in want if not w.startswith("-"))
+                        self.out(":fake.irc CAP %s ACK :%s" % (me, " ".join(want)))
+                    else:
+                        self.out(":fake.irc CAP %s NAK :%s" % (me, " ".join(want)))
                 elif sub == "END":
                     in_cap = False
             elif cmd == "AUTHENTICATE":
                 if arg == "PLAIN":
                     self.out("AUTHENTICATE +")
+                elif arg == "*":
+                    self.out(":fake.irc 906 %s :SASL authentication aborted" % me)
                 else:
-                    self.out(":fake.irc 900 %s %s!u@h dale :You are now logged in" % (nick or "*", nick or "*"))
-                    self.out(":fake.irc 903 %s :SASL authentication successful" % (nick or "*"))
+                    import base64
+                    try:
+                        z, u, pw = base64.b64decode(arg).split(b"\0")
+                    except Exception:
+                        z = u = pw = b""
+                    if u == b"dale" and pw == b"s3cret":
+                        self.out(":fake.irc 900 %s %s!u@h dale :You are now logged in as dale" % (me, me))
+                        self.out(":fake.irc 903 %s :SASL authentication successful" % me)
+                    else:
+                        self.out(":fake.irc 904 %s :SASL authentication failed" % me)
             elif cmd == "NICK":
-                nick = arg.lstrip(":")
-            elif cmd == "USER":
+                want = arg.lstrip(":")
+                if want == "taken":
+                    self.out(":fake.irc 433 %s %s :Nickname is already in use" % (me, want))
+                    continue
+                if registered:
+                    self.out(":%s!u@h NICK :%s" % (nick, want))
+                nick = want
+            elif cmd == "USER" or cmd == "PASS":
                 pass
             elif cmd == "PING":
                 self.out(":fake.irc PONG fake.irc " + arg)
             elif cmd == "JOIN":
-                self.out(":%s!u@h JOIN %s" % (nick, arg))
-                self.out(":fake.irc 353 %s = %s :@op +voice %s" % (nick, arg, nick))
-                self.out(":fake.irc 366 %s %s :End of /NAMES list." % (nick, arg))
-            elif cmd == "PRIVMSG":
+                for ch in arg.split(" ")[0].split(","):
+                    channels[ch] = True
+                    self.out(":%s!u@h JOIN %s" % (nick, ch))
+                    self.out(":fake.irc 332 %s %s :Amiga talk, be nice" % (nick, ch))
+                    if "multi-prefix" in self.acked:
+                        self.out(":fake.irc 353 %s = %s :@+op +voice %s" % (nick, ch, nick))
+                    else:
+                        self.out(":fake.irc 353 %s = %s :@op +voice %s" % (nick, ch, nick))
+                    self.out(":fake.irc 366 %s %s :End of /NAMES list." % (nick, ch))
+                    self.out(":other!o@h JOIN %s" % ch)
+                    self.out(":fake.irc MODE %s +o other" % ch)
+            elif cmd == "PART":
+                ch = arg.split(" ")[0]
+                channels.pop(ch, None)
+                self.out(":%s!u@h PART %s" % (nick, arg))
+            elif cmd in ("PRIVMSG", "NOTICE"):
                 target, text = arg.split(" ", 1)
-                self.out(":echo!e@h PRIVMSG %s %s" % (nick, text))
+                if "echo-message" in self.acked:
+                    self.out(":%s!u@h %s %s %s" % (nick, cmd, target, text))
+                if cmd == "PRIVMSG":
+                    if text.startswith(":\x01VERSION"):
+                        self.out(":echo!e@h PRIVMSG %s :\x01VERSION\x01" % nick)
+                    else:
+                        self.out(":echo!e@h PRIVMSG %s %s" % (target if target in channels else nick, text))
             elif cmd == "QUIT":
                 self.out("ERROR :Closing link")
                 return
             if nick and not registered and not in_cap:
                 registered = True
                 self.out(":fake.irc 001 %s :Welcome to the fake network" % nick)
-                self.out(":fake.irc 005 %s CHANTYPES=# PREFIX=(ov)@+ CASEMAPPING=rfc1459 :are supported" % nick)
+                self.out(":fake.irc 005 %s CHANTYPES=# PREFIX=(ov)@+ CASEMAPPING=rfc1459 NICKLEN=16 "
+                         "CHANMODES=b,k,l,imnt NETWORK=FakeNet :are supported" % nick)
                 self.out(":fake.irc PING :tok123")
 
 
@@ -225,7 +341,12 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
-KINDS = {"nntp": NNTPHandler, "irc": IRCHandler, "socks5": SOCKSHandler}
+class NNTP2Handler(NNTPHandler):
+    """A second news server (backup) with its own spool."""
+    spool_env = "NK_NNTP2_SPOOL"
+
+
+KINDS = {"nntp": NNTPHandler, "nntp2": NNTP2Handler, "irc": IRCHandler, "socks5": SOCKSHandler}
 
 
 def start(kinds):

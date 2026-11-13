@@ -9,12 +9,19 @@ endif()
 
 add_library(gfopennetkit STATIC
   src/nk_crc32.c src/nk_util.c src/nk_line.c src/nk_conn.c
-  src/nk_socks5.c src/nk_tls.c src/nk_journal.c src/nk_posix.c)
+  src/nk_socks5.c src/nk_tls.c src/nk_journal.c src/nk_posix.c
+  src/nk_textview.c)
 target_include_directories(gfopennetkit PUBLIC include)
+
+# Tests only when this is the top project (GFOpenNews and GFOpenIRC take the
+# library with add_subdirectory and build only it).
+if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  return()
+endif()
 
 enable_testing()
 find_package(Python3 COMPONENTS Interpreter)
-foreach(t crc32 line conn socks5 tls journal)
+foreach(t crc32 line conn socks5 tls journal textview)
   add_executable(test_${t} tests/test_${t}.c)
   target_link_libraries(test_${t} gfopennetkit)
   target_include_directories(test_${t} PRIVATE tests)
@@ -25,6 +32,7 @@ add_test(NAME conn COMMAND test_conn)
 add_test(NAME socks5 COMMAND test_socks5)
 add_test(NAME tls COMMAND test_tls)
 add_test(NAME journal COMMAND test_journal ${CMAKE_CURRENT_BINARY_DIR})
+add_test(NAME textview COMMAND test_textview)
 
 add_executable(test_live tests/test_live.c)
 target_link_libraries(test_live gfopennetkit)
