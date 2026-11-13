@@ -35,10 +35,17 @@ enum {
     NK_EARG        = -8,
     NK_ECANCELLED  = -9,  /* nk_conn_cancel() was called (QUIT, "cancel all") */
     NK_EREFUSED    = -10, /* proxy or peer refused */
-    NK_ECORRUPT    = -11  /* a journal record failed its check */
+    NK_ECORRUPT    = -11, /* a journal record failed its check */
+    NK_ENOTFOUND   = -12, /* the host name did not resolve */
+    NK_ESOCKET     = -13  /* no socket could be made (stack not running?) */
 };
 
 const char *nk_strerror(int err);
+
+/* A dotted IPv4 address ("192.168.0.195", four decimal parts 0-255, no
+ * leading '+' or spaces): 1 and *addr in host order, else 0. Transports try
+ * it before the resolver, so a numeric host never needs DNS. */
+int nk_parse_ipv4(const char *s, uint32_t *addr);
 
 /* ---- CRC32 (IEEE 802.3, reflected, as zlib, PNG, yEnc and PAR2 use) ------
  * Our own table-driven code. nk_crc32_update(0, ...) starts a new CRC. */

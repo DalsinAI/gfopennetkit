@@ -61,7 +61,7 @@ int nk_posix_tcp(const char *host, uint16_t port, NKTransport *out)
     hints.ai_socktype = SOCK_STREAM;
     snprintf(ps, sizeof(ps), "%u", (unsigned)port);
     if (getaddrinfo(host, ps, &hints, &res) != 0)
-        return NK_EIO;
+        return NK_ENOTFOUND;
     for (ai = res; ai; ai = ai->ai_next) {
         fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd < 0)
