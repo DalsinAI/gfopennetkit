@@ -50,6 +50,18 @@ static int px_fd(void *ctx)
     return ((PosixCtx *)ctx)->fd;
 }
 
+/* what a failed connect() says, as a netkit code */
+static int nk_connect_errno(int e)
+{
+    switch (e) {
+    case ECONNREFUSED: return NK_EREFUSED;
+    case ETIMEDOUT:    return NK_ETIMEDOUT;
+    case ENETUNREACH:
+    case EHOSTUNREACH: return NK_EUNREACH;
+    default:           return NK_EIO;
+    }
+}
+
 int nk_posix_tcp(const char *host, uint16_t port, NKTransport *out)
 {
     struct addrinfo hints, *res = 0, *ai;
@@ -60,20 +72,22 @@ int nk_posix_tcp(const char *host, uint16_t port, NKTransport *out)
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     snprintf(ps, sizeof(ps), "%u", (unsigned)port);
+    int err = NK_ESOCKET;
     if (getaddrinfo(host, ps, &hints, &res) != 0)
-        return NK_EIO;
+        return NK_ERESOLVE;
     for (ai = res; ai; ai = ai->ai_next) {
         fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
         if (fd < 0)
             continue;
         if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0)
             break;
+        err = nk_connect_errno(errno);
         close(fd);
         fd = -1;
     }
     freeaddrinfo(res);
     if (fd < 0)
-        return NK_EREFUSED;
+        return err;
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
     ctx = (PosixCtx *)malloc(sizeof(*ctx));
     if (!ctx) {

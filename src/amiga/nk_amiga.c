@@ -67,6 +67,7 @@ int nk_amiga_tcp(struct Library *socketBase, const char *host, uint16_t port,
     AmiTcp *c;
     struct hostent *he;
     struct sockaddr_in sa;
+    uint8_t ip[4];
     LONG one = 1;
     if (!socketBase || !host || !out)
         return NK_EARG;
@@ -74,25 +75,32 @@ int nk_amiga_tcp(struct Library *socketBase, const char *host, uint16_t port,
     if (!c)
         return NK_ENOMEM;
     c->base = socketBase;
-    he = gethostbyname((STRPTR)host);
-    if (!he || he->h_addrtype != AF_INET) {
-        free(c);
-        return NK_EIO;
-    }
     memset(&sa, 0, sizeof(sa));
     sa.sin_len = sizeof(sa);
     sa.sin_family = AF_INET;
     sa.sin_port = htons(port);
-    memcpy(&sa.sin_addr, he->h_addr, sizeof(sa.sin_addr));
+    /* a dotted address needs no lookup (not every stack's gethostbyname
+     * takes one) */
+    if (!nk_parse_ipv4(host, ip)) {
+        he = gethostbyname((STRPTR)host);
+        if (!he || he->h_addrtype != AF_INET || he->h_length != 4) {
+            free(c);
+            return NK_ERESOLVE;
+        }
+        memcpy(ip, he->h_addr, 4);
+    }
+    memcpy(&sa.sin_addr, ip, 4);
     c->fd = socket(AF_INET, SOCK_STREAM, 0);
     if (c->fd < 0) {
         free(c);
-        return NK_EIO;
+        return NK_ESOCKET;
     }
     if (connect(c->fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+        LONG e = Errno();
         CloseSocket(c->fd);
         free(c);
-        return NK_EREFUSED;
+        return e == ECONNREFUSED ? NK_EREFUSED : e == ETIMEDOUT ? NK_ETIMEDOUT
+             : (e == ENETUNREACH || e == EHOSTUNREACH) ? NK_EUNREACH : NK_EIO;
     }
     IoctlSocket(c->fd, FIONBIO, (char *)&one);
     out->ctx = c;
