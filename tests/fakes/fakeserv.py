@@ -33,7 +33,16 @@ BODY = {
 }
 
 
+def spool_file(spool, msgid):
+    """Spool article for a message-id: <spool>/<id with unsafe chars as _>.art"""
+    safe = "".join(c if c.isalnum() or c in "@._-" else "_" for c in msgid.strip("<>"))
+    return os.path.join(spool, safe + ".art")
+
+
 class NNTPHandler(socketserver.StreamRequestHandler):
+    # binaries tests put articles in a spool directory named by this variable
+    spool_env = "NK_NNTP_SPOOL"
+
     def out(self, line):
         self.wfile.write(line.encode("latin-1") + b"\r\n")
 
@@ -101,6 +110,25 @@ class NNTPHandler(socketserver.StreamRequestHandler):
                 for n, (subj, frm, mid, ref) in sorted(GROUPS[group].items()):
                     self.out("\t".join([str(n), subj, frm, "13 Nov 2026 18:00:00 +0000",
                                         mid, ref, "100", "3"]))
+                self.out(".")
+            elif cmd in ("ARTICLE", "BODY") and len(parts) > 1 and parts[1].startswith("<"):
+                spool = os.environ.get(self.spool_env)
+                path = spool_file(spool, parts[1]) if spool else None
+                if not path or not os.path.exists(path):
+                    self.out("430 no such article")
+                    continue
+                self.out("%d 0 %s" % (220 if cmd == "ARTICLE" else 222, parts[1]))
+                with open(path, "rb") as f:
+                    body = f.read()
+                if cmd == "ARTICLE":
+                    self.out("Message-ID: " + parts[1])
+                    self.out("")
+                if body.endswith(b"\n"):
+                    body = body[:-1]
+                for b in body.split(b"\n"):
+                    if b.endswith(b"\r"):
+                        b = b[:-1]
+                    self.wfile.write((b"." + b if b.startswith(b".") else b) + b"\r\n")
                 self.out(".")
             elif cmd in ("ARTICLE", "BODY", "HEAD") and len(parts) > 1 and group:
                 n = int(parts[1]) if parts[1].isdigit() else -1
@@ -252,7 +280,12 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
-KINDS = {"nntp": NNTPHandler, "irc": IRCHandler, "socks5": SOCKSHandler}
+class NNTP2Handler(NNTPHandler):
+    """A second news server (backup) with its own spool."""
+    spool_env = "NK_NNTP2_SPOOL"
+
+
+KINDS = {"nntp": NNTPHandler, "nntp2": NNTP2Handler, "irc": IRCHandler, "socks5": SOCKSHandler}
 
 
 def start(kinds):
