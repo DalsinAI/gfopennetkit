@@ -1,13 +1,14 @@
 #!/bin/sh
 # gfopennetkit for AmigaOS 3.x: lib/libgfopennetkit.a (static link library),
 # with the os32 GCC 16 stove (amiga-gcc, libnix), 68040, no FPU.
-#   STOVE    the stove (default ~/AmiCradle/stoves/os32-gcc16)
+#   STOVE    the stove (default ~/AmiCradle/stoves/os32-gcc16-open6: the one with
+#            the Roadshow netinclude that proto/socket.h comes from)
 #   TLS      a gfopentls checkout for its headers (default ../gfopentls)
 #   OUT      the output directory (default build-amiga)
 # MIT licence, (c) 2026 AmiCradle Team.
 set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-STOVE=${STOVE:-"$HOME/AmiCradle/stoves/os32-gcc16"}
+STOVE=${STOVE:-"$HOME/AmiCradle/stoves/os32-gcc16-open6"}
 P="$STOVE/prefix"
 CC=${CC:-"$P/bin/m68k-amigaos-gcc"}
 AR=${AR:-"$P/bin/m68k-amigaos-ar"}

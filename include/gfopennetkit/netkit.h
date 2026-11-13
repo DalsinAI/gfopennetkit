@@ -200,7 +200,10 @@ int  nk_tls_wrap(const NKTlsOps *ops, void *tls, NKTransport *tcp, NKTransport *
  * TLS library's code and words from nk_tls_error(). */
 int  nk_tls_handshake(NKTransport *t);
 long nk_tls_error(NKTransport *t, const char **text);
-/* 1 when the peer closed without close_notify (the last data may be cut). */
+/* 1 when the peer closed without close_notify (the last data may be cut).
+ * Such a close reads as NK_EOF like a clean one, so an app must check this
+ * at EOF and never take a transfer that ended there as complete (an
+ * article body, a yEnc part, a file): treat it as an I/O error. */
 int  nk_tls_truncated(NKTransport *t);
 
 /* ---- host / POSIX helpers (not on the Amiga build) --------------------------
