@@ -13,6 +13,12 @@ add_library(gfopennetkit STATIC
   src/nk_textview.c)
 target_include_directories(gfopennetkit PUBLIC include)
 
+# Tests only when this is the top project (GFOpenNews and GFOpenIRC take the
+# library with add_subdirectory and build only it).
+if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  return()
+endif()
+
 enable_testing()
 find_package(Python3 COMPONENTS Interpreter)
 foreach(t crc32 line conn socks5 tls journal textview)
