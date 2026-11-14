@@ -42,4 +42,7 @@ if(Python3_FOUND)
   add_test(NAME live_fake_servers
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/fakes/fakeserv.py
             --run nntp,irc,socks5 -- $<TARGET_FILE:test_live>)
+  file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/posted)
+  set_tests_properties(live_fake_servers PROPERTIES
+    ENVIRONMENT "NK_NNTP_POSTED=${CMAKE_CURRENT_BINARY_DIR}/posted")
 endif()

@@ -2,6 +2,7 @@
  * directly and through the fake SOCKS5 proxy. Local ports only.
  * MIT licence, (c) 2026 AmiCradle Team. */
 #include <poll.h>
+#include <stdio.h>
 #include "gfopennetkit/netkit.h"
 #include "nk_test.h"
 
@@ -66,6 +67,48 @@ static void nntp_session(NKConn *c)
         body++;
     }
     CHECK_EQ(body, 3);
+    /* POST: 340, the article dot-stuffed, then 240; the fake undoes the
+     * dots and (with NK_NNTP_POSTED) writes it out */
+    nk_conn_sendline(c, "POST");
+    CHECK_EQ(wait_line(c, l, sizeof(l)), 1);
+    CHECK(strncmp(l, "340", 3) == 0);
+    nk_conn_sendline(c, "From: k@example.invalid");
+    nk_conn_sendline(c, "Newsgroups: comp.sys.amiga.misc");
+    nk_conn_sendline(c, "Subject: test post");
+    nk_conn_sendline(c, "");
+    nk_conn_sendline(c, "..a line with a dot");
+    nk_conn_sendline(c, ".");
+    CHECK_EQ(wait_line(c, l, sizeof(l)), 1);
+    CHECK(strncmp(l, "240 article posted <post", 24) == 0);
+    {
+        const char *d = getenv("NK_NNTP_POSTED");
+        char path[1024], got[256];
+        FILE *f;
+        size_t n;
+        if (d) {
+            snprintf(path, sizeof(path), "%s/%d.art", d, atoi(l + 24));
+            f = fopen(path, "rb");
+            CHECK(f != 0);
+            if (f) {
+                n = fread(got, 1, sizeof(got) - 1, f);
+                got[n] = 0;
+                fclose(f);
+                CHECK(strcmp(got, "From: k@example.invalid\nNewsgroups: comp.sys.amiga.misc\n"
+                                  "Subject: test post\n\n.a line with a dot\n") == 0);
+            }
+        }
+    }
+    /* an article without Newsgroups is refused */
+    nk_conn_sendline(c, "POST");
+    CHECK_EQ(wait_line(c, l, sizeof(l)), 1);
+    CHECK(strncmp(l, "340", 3) == 0);
+    nk_conn_sendline(c, "From: k@example.invalid");
+    nk_conn_sendline(c, "Subject: no groups");
+    nk_conn_sendline(c, "");
+    nk_conn_sendline(c, "text");
+    nk_conn_sendline(c, ".");
+    CHECK_EQ(wait_line(c, l, sizeof(l)), 1);
+    CHECK(strcmp(l, "441 posting failed: no Newsgroups header") == 0);
     nk_conn_sendline(c, "QUIT");
     CHECK_EQ(wait_line(c, l, sizeof(l)), 1);
     CHECK(strncmp(l, "205", 3) == 0);
