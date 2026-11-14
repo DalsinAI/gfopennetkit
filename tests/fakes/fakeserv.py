@@ -42,9 +42,55 @@ def spool_file(spool, msgid):
 class NNTPHandler(socketserver.StreamRequestHandler):
     # binaries tests put articles in a spool directory named by this variable
     spool_env = "NK_NNTP_SPOOL"
+    posted = 0
+    lock = threading.Lock()
 
     def out(self, line):
         self.wfile.write(line.encode("latin-1") + b"\r\n")
+
+    def post(self):
+        """POST (RFC 3977 6.3.1): 340, then the dot-stuffed article up to ".".
+        It needs From, Newsgroups (known groups only) and Subject headers,
+        else 441. With NK_NNTP_POSTED naming a directory, the article (dots
+        undone, LF line ends) is written there as <n>.art."""
+        self.out("340 send article to be posted")
+        lines = []
+        for raw in self.rfile:
+            l = raw.decode("latin-1").rstrip("\r\n")
+            if l == ".":
+                break
+            lines.append(l[1:] if l.startswith("..") else l)
+        else:
+            return
+        heads = {}
+        for l in lines:
+            if not l:
+                break
+            if ":" in l and not l[0].isspace():
+                k, v = l.split(":", 1)
+                heads[k.strip().lower()] = v.strip()
+        groups = [g.strip() for g in heads.get("newsgroups", "").split(",") if g.strip()]
+        why = None
+        if not heads.get("from"):
+            why = "no From header"
+        elif not heads.get("subject"):
+            why = "no Subject header"
+        elif not groups:
+            why = "no Newsgroups header"
+        elif any(g not in GROUPS for g in groups):
+            why = "no such newsgroup"
+        if why:
+            self.out("441 posting failed: " + why)
+            return
+        with NNTPHandler.lock:
+            NNTPHandler.posted += 1
+            n = NNTPHandler.posted
+        mid = heads.get("message-id") or "<post%d@fake>" % n
+        d = os.environ.get("NK_NNTP_POSTED")
+        if d:
+            with open(os.path.join(d, "%d.art" % n), "w", encoding="latin-1") as f:
+                f.write("\n".join(lines) + "\n")
+        self.out("240 article posted " + mid)
 
     def handle(self):
         authed = False
@@ -111,6 +157,8 @@ class NNTPHandler(socketserver.StreamRequestHandler):
                     self.out("\t".join([str(n), subj, frm, "13 Nov 2026 18:00:00 +0000",
                                         mid, ref, "100", "3"]))
                 self.out(".")
+            elif cmd == "POST":
+                self.post()
             elif cmd in ("ARTICLE", "BODY") and len(parts) > 1 and parts[1].startswith("<"):
                 spool = os.environ.get(self.spool_env)
                 path = spool_file(spool, parts[1]) if spool else None
